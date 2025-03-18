@@ -1,7 +1,4 @@
 use clap::Parser;
-#[cfg(feature = "metric-docs")]
-use metadoc_example::metrics::METRIC_META;
-use minijinja::{Environment, context};
 
 #[derive(Parser)]
 struct Cli {
@@ -11,10 +8,13 @@ struct Cli {
 }
 
 fn main() {
-    let args = Cli::parse();
+    let _args = Cli::parse();
 
     #[cfg(feature = "metric-docs")]
-    if args.metric_docs {
+    if _args.metric_docs {
+        use metadoc_example::metrics::METRIC_META;
+        use minijinja::{Environment, context};
+
         let mut env = Environment::new();
         minijinja_embed::load_templates!(&mut env);
         let tmpl = env.get_template("metric.html").unwrap();
