@@ -24,4 +24,8 @@ This example shows how you would define custom metrics and generate documentatio
 
 Each metric conditionally derives `metadoc::Described`.
 
-There is a [`doc`](src/metrics/doc.rs) module that is also conditional on the `metric-docs` feature that provides an adapter between the `metadoc::Descriptor` and a much simpler data structure designed to be used in the [template](src/templates/metric.html). See the [minijinja](https://docs.rs/minijinja/latest/minijinja) documentation for details on the template syntax.
+There is a [`doc`](metadoc-example/src/metrics/doc.rs) module that is also conditional on the `metric-docs` feature that provides an adapter between the `metadoc::Descriptor` and a much simpler data structure designed to be used in the [template](metadoc-example/src/templates/metric.html).
+
+See the [minijinja](https://docs.rs/minijinja/latest/minijinja) documentation for details on the template syntax.
+
+See the [metadoc examples](metadoc/tests) for examples of what can be done with struct metadata.
