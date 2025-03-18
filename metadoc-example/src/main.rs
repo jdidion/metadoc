@@ -19,7 +19,6 @@ fn main() {
         minijinja_embed::load_templates!(&mut env);
         let tmpl = env.get_template("metric.html").unwrap();
         for metric_meta in METRIC_META.iter() {
-            println!("{:?}", metric_meta);
             println!("{}", tmpl.render(context!(meta => metric_meta)).unwrap());
         }
     }
