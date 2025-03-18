@@ -5,22 +5,109 @@
 //! Rather than having that information stored separately this library
 //! intends to maintain a single source of truth.
 
-#![warn(missing_docs, non_ascii_idents, trivial_numeric_casts,
-    noop_method_call, single_use_lifetimes, trivial_casts,
-    unused_lifetimes, nonstandard_style, variant_size_differences)]
+#![warn(
+    missing_docs,
+    non_ascii_idents,
+    trivial_numeric_casts,
+    noop_method_call,
+    single_use_lifetimes,
+    trivial_casts,
+    unused_lifetimes,
+    nonstandard_style,
+    variant_size_differences
+)]
 #![deny(keyword_idents)]
 #![warn(clippy::missing_docs_in_private_items)]
 #![allow(clippy::needless_return, clippy::while_let_on_iterator)]
 
-pub use struct_metadata_derive::{Described, MetadataKind};
+pub use metadoc_derive::{Described, MetadataKind};
 
+use std::borrow::{Borrow, Cow};
 use std::collections::HashMap;
+
+/// Newtype for `Option<Vec<Cow<'static, str>>>`.
+#[derive(Debug, PartialEq, Eq, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct StaticStrings(Option<Vec<Cow<'static, str>>>);
+
+impl StaticStrings {
+    /// A `StaticStrings` containing `None`.
+    pub const NONE: Self = Self(None);
+
+    /// Create a new `StaticStrings` from an optional slice of strings.
+    pub fn from_option_vec(strs: Option<Vec<&'static str>>) -> Self {
+        Self(strs.map(|strs: Vec<&str>| strs.iter().map(|s| Cow::Borrowed(*s)).collect()))
+    }
+
+    /// Concatenates all the strings in the `StaticStrings` into a single `String` delimited by
+    /// `sep`.
+    pub fn to_string(&self, sep: &str) -> String {
+        self.0
+            .as_ref()
+            .map(|strs| strs.join(sep))
+            .unwrap_or_default()
+    }
+}
+
+impl Default for StaticStrings {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+impl<T: AsRef<[&'static str]>> From<T> for StaticStrings {
+    fn from(value: T) -> Self {
+        let value = value.as_ref();
+        if value.is_empty() {
+            Self::NONE
+        } else {
+            Self(Some(value.iter().map(|s| Cow::Borrowed(*s)).collect()))
+        }
+    }
+}
+
+impl IntoIterator for StaticStrings {
+    type Item = String;
+    type IntoIter = StaticStringIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        StaticStringIter {
+            strings: self,
+            index: 0,
+        }
+    }
+}
+
+/// Iterator over Strings cloned from static strings.
+pub struct StaticStringIter {
+    strings: StaticStrings,
+    index: usize,
+}
+
+impl Iterator for StaticStringIter {
+    type Item = String;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self
+            .strings
+            .0
+            .as_ref()
+            .map(|v| v.get(self.index))
+            .flatten()
+            .map(|s| s.clone().into_owned());
+        if item.is_some() {
+            self.index += 1;
+        }
+        item
+    }
+}
 
 /// Information about a type along with its metadata and doc-strings.
 #[derive(Debug, PartialEq, Eq, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Descriptor<Metadata: Default> {
     /// Docstring for the type
-    pub docs: Option<Vec<&'static str>>,
+    pub docs: StaticStrings,
     /// Metadata for the type
     pub metadata: Metadata,
     /// Details about the type
@@ -29,47 +116,52 @@ pub struct Descriptor<Metadata: Default> {
 
 impl<Metadata: MetadataKind> Descriptor<Metadata> {
     /// A helper method used by the Described derive macro
-    pub fn propagate(&mut self, context: Option<&Metadata> ) {
+    pub fn propagate(&mut self, context: Option<&Metadata>) {
         let context = match context {
             Some(context) => {
                 self.metadata.forward_propagate_context(context);
                 context
-            },
-            None => {
-                &self.metadata
             }
+            None => &self.metadata,
         };
         match &mut self.kind {
             Kind::Struct { children, .. } => {
                 for child in children {
-                    child.metadata.forward_propagate_entry_defaults(context, &child.type_info.metadata);
+                    child
+                        .metadata
+                        .forward_propagate_entry_defaults(context, &child.type_info.metadata);
                     child.type_info.propagate(Some(&child.metadata));
-                    child.metadata.backward_propagate_entry_defaults(context, &child.type_info.metadata);
+                    child
+                        .metadata
+                        .backward_propagate_entry_defaults(context, &child.type_info.metadata);
                 }
-            },
-            Kind::Aliased { kind, .. } |
-            Kind::Sequence(kind) | 
-            Kind::Option(kind) => {
-                self.metadata.forward_propagate_child_defaults(&kind.metadata);
+            }
+            Kind::Aliased { kind, .. } | Kind::Sequence(kind) | Kind::Option(kind) => {
+                self.metadata
+                    .forward_propagate_child_defaults(&kind.metadata);
                 kind.propagate(Some(&self.metadata));
-                self.metadata.backward_propagate_child_defaults(&kind.metadata);
-            },
+                self.metadata
+                    .backward_propagate_child_defaults(&kind.metadata);
+            }
             // Kind::Enum { variants } => {
-                // for child in variants {
-                //     // child.metadata.forward_propagate_entry_defaults(&self.metadata, &child.type_info.metadata);
-                //     // child.type_info.propagate(Some(&child.metadata));
-                //     // child.metadata.backward_propagate_entry_defaults(&self.metadata, &child.type_info.metadata);
-                // }
+            // for child in variants {
+            //     // child.metadata.forward_propagate_entry_defaults(&self.metadata, &child.type_info.metadata);
+            //     // child.type_info.propagate(Some(&child.metadata));
+            //     // child.metadata.backward_propagate_entry_defaults(&self.metadata, &child.type_info.metadata);
+            // }
             // },
             Kind::Mapping(key, value) => {
-                self.metadata.forward_propagate_child_defaults(&key.metadata);
-                self.metadata.forward_propagate_child_defaults(&value.metadata);
+                self.metadata
+                    .forward_propagate_child_defaults(&key.metadata);
+                self.metadata
+                    .forward_propagate_child_defaults(&value.metadata);
                 key.propagate(Some(&self.metadata));
                 value.propagate(Some(&self.metadata));
-                self.metadata.backward_propagate_child_defaults(&value.metadata);
-                self.metadata.backward_propagate_child_defaults(&key.metadata);
-
-            },
+                self.metadata
+                    .backward_propagate_child_defaults(&value.metadata);
+                self.metadata
+                    .backward_propagate_child_defaults(&key.metadata);
+            }
             _ => {}
         }
     }
@@ -91,39 +183,44 @@ impl<Metadata: MetadataKind> Descriptor<Metadata> {
 
 /// Enum reflecting all supported types
 #[derive(Debug, PartialEq, Eq, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Kind<Metadata: Default> {
     /// The type is a struct
     Struct {
         /// Name given to the struct in its declaration
-        name: &'static str,
+        name: Cow<'static, str>,
         /// List of fields within this struct
         children: Vec<Entry<Metadata>>,
     },
     /// A struct wrapping a single anonymous field
     Aliased {
         /// Name given to the struct in its declaration
-        name: &'static str,
+        name: Cow<'static, str>,
         /// The type this alias struct wraps
-        kind: Box<Descriptor<Metadata>>
+        kind: Box<Descriptor<Metadata>>,
     },
     /// A simple no-field enum type
     Enum {
         /// Name given to the enum in its declaration
-        name: &'static str,
+        name: Cow<'static, str>,
         /// Information about each variant value within this enum
         variants: Vec<Variant<Metadata>>,
     },
     /// A list of items of a consistent type
-    Sequence( Box<Descriptor<Metadata>> ),
+    Sequence(Box<Descriptor<Metadata>>),
     /// An item which is optionally present
-    Option( Box<Descriptor<Metadata>> ),
+    Option(Box<Descriptor<Metadata>>),
     /// A pairwise mapping between consistent types with unique keys
-    Mapping( Box<Descriptor<Metadata>>, Box<Descriptor<Metadata>> ),
+    Mapping(Box<Descriptor<Metadata>>, Box<Descriptor<Metadata>>),
     /// A field describing a point in time
     DateTime,
     /// A string
     String,
+    /// Unsigned integer
+    Usize,
+    /// Signed integer
+    Isize,
     /// Unsigned 128 bit integer
     U128,
     /// Signed 128 bit integer
@@ -158,7 +255,7 @@ pub enum Kind<Metadata: Default> {
 
 impl<Metadata: MetadataKind> Kind<Metadata> {
     /// Fetch the name of the type
-    pub fn name(&self) -> &'static str {
+    pub fn name(&self) -> impl Borrow<str> {
         match self {
             Kind::Struct { name, .. } => name,
             Kind::Aliased { name, .. } => name,
@@ -168,6 +265,8 @@ impl<Metadata: MetadataKind> Kind<Metadata> {
             Kind::Mapping(_, _) => "mapping",
             Kind::DateTime => "datetime",
             Kind::String => "string",
+            Kind::Usize => "usize",
+            Kind::Isize => "isize",
             Kind::U128 => "u128",
             Kind::I128 => "i128",
             Kind::U64 => "u64",
@@ -187,47 +286,68 @@ impl<Metadata: MetadataKind> Kind<Metadata> {
     }
 
     /// Construct a type descriptor for a struct with the given name and fields.
-    /// 
+    ///
     /// Any structs in the flattened_children list will have their fields added to this
     /// new struct as if they were members of it. (this corresponds to the 'flatten' parameter in serde)
-    pub fn new_struct(name: &'static str, mut children: Vec<Entry<Metadata>>, flattened_children: &mut [Descriptor<Metadata>], flattened_metadata: &mut [Metadata]) -> Self {
-        for (child, meta) in flattened_children.iter_mut().zip(flattened_metadata.iter_mut()) {
-            if let Kind::Struct { children: flattening, .. } = &mut child.kind {
+    pub fn new_struct(
+        name: &'static str,
+        mut children: Vec<Entry<Metadata>>,
+        flattened_children: &mut [Descriptor<Metadata>],
+        flattened_metadata: &mut [Metadata],
+    ) -> Self {
+        for (child, meta) in flattened_children
+            .iter_mut()
+            .zip(flattened_metadata.iter_mut())
+        {
+            if let Kind::Struct {
+                children: flattening,
+                ..
+            } = &mut child.kind
+            {
                 for child in flattening.iter_mut() {
-                    child.metadata.forward_propagate_entry_defaults(meta, &child.type_info.metadata);
+                    child
+                        .metadata
+                        .forward_propagate_entry_defaults(meta, &child.type_info.metadata);
                     child.type_info.propagate(Some(&child.metadata));
-                    child.metadata.backward_propagate_entry_defaults(meta, &child.type_info.metadata);
+                    child
+                        .metadata
+                        .backward_propagate_entry_defaults(meta, &child.type_info.metadata);
                 }
                 children.append(flattening)
             }
         }
 
-        Self::Struct { name, children }
+        Self::Struct {
+            name: Cow::Borrowed(name),
+            children,
+        }
     }
 }
 
 /// Struct describing an enum variant
 #[derive(Debug, PartialEq, Eq, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Variant<Metadata: Default> {
     /// String value used to describe the variant.
     /// The DescribedEnumString derive can be used to build this label using the to_string method
-    pub label: &'static str,
+    pub label: Cow<'static, str>,
     /// doc strings describing this variant
-    pub docs: Option<Vec<&'static str>>,
+    pub docs: StaticStrings,
     /// metadata describing this variant
     pub metadata: Metadata,
     /// List of names this field may be known as
-    pub aliases: &'static [&'static str]
+    pub aliases: StaticStrings,
 }
 
 /// Struct describing a struct field
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Entry<Metadata: Default> {
     /// Label of the field in question
     /// This respects serde's rename attribute
-    pub label: &'static str,
+    pub label: Cow<'static, str>,
     /// doc string describing this field
-    pub docs: Option<Vec<&'static str>>,
+    pub docs: StaticStrings,
     /// metadata describing this field
     pub metadata: Metadata,
     /// Type of this field
@@ -235,19 +355,23 @@ pub struct Entry<Metadata: Default> {
     /// Wether this field has a default defined
     pub has_default: bool,
     /// List of names this field may be known as
-    pub aliases: &'static [&'static str]
+    pub aliases: StaticStrings,
 }
 
 impl<T: PartialEq + Default> PartialEq for Entry<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.label == other.label && self.docs == other.docs && self.metadata == other.metadata && self.type_info == other.type_info && self.has_default == other.has_default
+        self.label == other.label
+            && self.docs == other.docs
+            && self.metadata == other.metadata
+            && self.type_info == other.type_info
+            && self.has_default == other.has_default
     }
 }
 
 impl<T: Eq + Default> Eq for Entry<T> {}
 
 /// A self description of the type being targeted including doc-strings and metadata annotations.
-pub trait Described<M: Default=HashMap<&'static str, &'static str>> {
+pub trait Described<M: Default = HashMap<&'static str, &'static str>> {
     /// Get self description of this type
     fn metadata() -> Descriptor<M>;
 }
@@ -256,60 +380,71 @@ pub trait Described<M: Default=HashMap<&'static str, &'static str>> {
 macro_rules! basic_described {
     ($type_name:ident, $type_macro:ident) => {
         impl<M: Default> Described<M> for $type_name {
-            fn metadata() -> Descriptor<M> { Descriptor { docs: None, metadata: M::default(), kind: Kind::$type_macro } }
+            fn metadata() -> Descriptor<M> {
+                Descriptor {
+                    docs: StaticStrings::NONE,
+                    metadata: M::default(),
+                    kind: Kind::$type_macro,
+                }
+            }
         }
     };
 }
 
-basic_described!{String, String}
-basic_described!{i128, I128}
-basic_described!{u128, U128}
-basic_described!{i64, I64}
-basic_described!{u64, U64}
-basic_described!{i32, I32}
-basic_described!{u32, U32}
-basic_described!{i16, I16}
-basic_described!{u16, U16}
-basic_described!{i8, I8}
-basic_described!{u8, U8}
-basic_described!{f64, F64}
-basic_described!{f32, F32}
-basic_described!{bool, Bool}
-
+basic_described! {String, String}
+basic_described! {usize, Usize}
+basic_described! {isize, Isize}
+basic_described! {i128, I128}
+basic_described! {u128, U128}
+basic_described! {i64, I64}
+basic_described! {u64, U64}
+basic_described! {i32, I32}
+basic_described! {u32, U32}
+basic_described! {i16, I16}
+basic_described! {u16, U16}
+basic_described! {i8, I8}
+basic_described! {u8, U8}
+basic_described! {f64, F64}
+basic_described! {f32, F32}
+basic_described! {bool, Bool}
 
 impl<M: Default, T: Described<M>> Described<M> for Option<T> {
     fn metadata() -> Descriptor<M> {
         Descriptor {
-            docs: None,
+            docs: StaticStrings::NONE,
             metadata: M::default(),
-            kind: Kind::Option(Box::new(T::metadata()))
+            kind: Kind::Option(Box::new(T::metadata())),
         }
     }
 }
 
 #[cfg(feature = "std")]
 impl<M: Default, T: Described<M>> Described<M> for Box<T> {
-    fn metadata() -> Descriptor<M> { T::metadata() }
+    fn metadata() -> Descriptor<M> {
+        T::metadata()
+    }
 }
 
 #[cfg(feature = "std")]
 impl<M: Default, T: Described<M>> Described<M> for Vec<T> {
     fn metadata() -> Descriptor<M> {
         Descriptor {
-            docs: None,
+            docs: StaticStrings::NONE,
             metadata: M::default(),
-            kind: Kind::Sequence(Box::new(T::metadata()))
+            kind: Kind::Sequence(Box::new(T::metadata())),
         }
     }
 }
 
 #[cfg(feature = "std")]
-impl<M: Default, K: Described<M> + core::hash::Hash, V: Described<M>> Described<M> for HashMap<K, V> {
+impl<M: Default, K: Described<M> + core::hash::Hash, V: Described<M>> Described<M>
+    for HashMap<K, V>
+{
     fn metadata() -> Descriptor<M> {
         Descriptor {
-            docs: None,
+            docs: StaticStrings::NONE,
             metadata: M::default(),
-            kind: Kind::Mapping(Box::new(K::metadata()), Box::new(V::metadata()))
+            kind: Kind::Mapping(Box::new(K::metadata()), Box::new(V::metadata())),
         }
     }
 }
@@ -317,14 +452,22 @@ impl<M: Default, K: Described<M> + core::hash::Hash, V: Described<M>> Described<
 #[cfg(feature = "chrono")]
 impl<M: Default, Tz: chrono::TimeZone> Described<M> for chrono::DateTime<Tz> {
     fn metadata() -> Descriptor<M> {
-        Descriptor { docs: None, metadata: M::default(), kind: Kind::DateTime }
+        Descriptor {
+            docs: StaticStrings::NONE,
+            metadata: M::default(),
+            kind: Kind::DateTime,
+        }
     }
 }
 
 #[cfg(feature = "serde_json")]
 impl<M: Default> Described<M> for serde_json::Value {
     fn metadata() -> Descriptor<M> {
-        Descriptor { docs: None, metadata: M::default(), kind: Kind::JSON }
+        Descriptor {
+            docs: None,
+            metadata: M::default(),
+            kind: Kind::JSON,
+        }
     }
 }
 
@@ -334,7 +477,7 @@ impl<M: Default, K: Described<M>, V: Described<M>> Described<M> for serde_json::
         Descriptor {
             docs: None,
             metadata: M::default(),
-            kind: Kind::Mapping(Box::new(K::metadata()), Box::new(V::metadata()))
+            kind: Kind::Mapping(Box::new(K::metadata()), Box::new(V::metadata())),
         }
     }
 }
@@ -347,9 +490,9 @@ pub trait MetadataKind: Default {
     fn forward_propagate_entry_defaults(&mut self, _context: &Self, _kind: &Self) {}
     /// Update metadata values on an entry based on the outer context and inner type data
     fn backward_propagate_entry_defaults(&mut self, _context: &Self, _kind: &Self) {}
-    /// Update metadata values on a type entry based on its child type 
+    /// Update metadata values on a type entry based on its child type
     fn forward_propagate_child_defaults(&mut self, _kind: &Self) {}
-    /// Update metadata values on a type entry based on its child type 
+    /// Update metadata values on a type entry based on its child type
     fn backward_propagate_child_defaults(&mut self, _kind: &Self) {}
 }
 

@@ -1,35 +1,47 @@
 //! Derive macro for the struct-metadata package.
 
-#![warn(missing_docs, non_ascii_idents, trivial_numeric_casts,
-    noop_method_call, single_use_lifetimes, trivial_casts,
-    unused_lifetimes, nonstandard_style, variant_size_differences)]
+#![warn(
+    missing_docs,
+    non_ascii_idents,
+    trivial_numeric_casts,
+    noop_method_call,
+    single_use_lifetimes,
+    trivial_casts,
+    unused_lifetimes,
+    nonstandard_style,
+    variant_size_differences
+)]
 #![deny(keyword_idents)]
 #![warn(clippy::missing_docs_in_private_items)]
 #![allow(clippy::needless_return, clippy::while_let_on_iterator)]
 
-
 use convert_case::Casing;
 use proc_macro::{self, TokenStream};
-use quote::{quote, quote_spanned, ToTokens};
+use quote::{ToTokens, quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{parse_macro_input, DeriveInput, Token, Ident, LitBool};
+use syn::{DeriveInput, Ident, LitBool, Token, parse_macro_input};
 
 /// Derive macro for the MetadataKind trait
 #[proc_macro_derive(MetadataKind)]
 pub fn derive_metadata_kind(input: TokenStream) -> TokenStream {
-    let DeriveInput {ident, ..} = parse_macro_input!(input);
+    let DeriveInput { ident, .. } = parse_macro_input!(input);
 
     let output = quote! {
-        impl struct_metadata::MetadataKind for #ident {}
+        impl metadoc::MetadataKind for #ident {}
     };
 
     output.into()
 }
 
 /// Derive macro for the Described trait
-#[proc_macro_derive(Described, attributes(metadata, metadata_type, metadata_sequence, serde))]
+#[proc_macro_derive(
+    Described,
+    attributes(metadata, metadata_type, metadata_sequence, serde)
+)]
 pub fn derive(input: TokenStream) -> TokenStream {
-    let DeriveInput {ident, attrs, data, ..} = parse_macro_input!(input);
+    let DeriveInput {
+        ident, attrs, data, ..
+    } = parse_macro_input!(input);
 
     let metadata_type = parse_metadata_type(&attrs);
     let serde_attrs = _parse_serde_attrs(&attrs);
@@ -42,7 +54,6 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     match data {
         syn::Data::Struct(data) => {
-
             let kind = match data.fields {
                 syn::Fields::Named(fields) => {
                     let mut children = vec![];
@@ -50,13 +61,19 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     let mut flattened_metadata = vec![];
 
                     for field in &fields.named {
-                        let SerdeFieldAttrs {rename, flatten, mut has_default, mut aliases } = _parse_serde_field_attrs(&field.attrs);
+                        let SerdeFieldAttrs {
+                            rename,
+                            flatten,
+                            mut has_default,
+                            mut aliases,
+                        } = _parse_serde_field_attrs(&field.attrs);
                         has_default |= serde_attrs.has_default;
                         let name = field.ident.clone().unwrap();
                         let ty = &field.ty;
-                        let ty = quote_spanned!(ty.span() => <#ty as struct_metadata::Described::<#metadata_type>>::metadata());
+                        let ty = quote_spanned!(ty.span() => <#ty as metadoc::Described::<#metadata_type>>::metadata());
                         let docs = parse_doc_comment(&field.attrs);
-                        let metadata: proc_macro2::TokenStream = parse_metadata_params(&metadata_type, &field.attrs);
+                        let metadata: proc_macro2::TokenStream =
+                            parse_metadata_params(&metadata_type, &field.attrs);
 
                         let name = if let Some(rename) = rename {
                             aliases.insert(0, rename.clone());
@@ -74,50 +91,50 @@ pub fn derive(input: TokenStream) -> TokenStream {
                             flattened_children.push(ty);
                             flattened_metadata.push(metadata);
                         } else {
-                            children.push(quote!{struct_metadata::Entry::<#metadata_type> {
-                                label: #name,
-                                docs: #docs,
+                            children.push(quote! {metadoc::Entry::<#metadata_type> {
+                                label: #name.into(),
+                                docs: metadoc::StaticStrings::from_option_vec(#docs),
                                 metadata: #metadata,
                                 type_info: #ty,
                                 has_default: #has_default,
-                                aliases: &[#(#aliases),*]
+                                aliases: [#(#aliases),*].as_slice().into()
                             }});
                         }
                     }
 
                     if flattened_children.is_empty() {
-                        quote!(struct_metadata::Kind::Struct::<#metadata_type> {
-                            name: #outer_name,
+                        quote!(metadoc::Kind::Struct::<#metadata_type> {
+                            name: #outer_name.into(),
                             children: vec![#(#children),*]
                         })
                     } else {
-                        quote!(struct_metadata::Kind::<#metadata_type>::new_struct(#outer_name, vec![#(#children),*], &mut [#(#flattened_children),*], &mut [#(#flattened_metadata),*]))
+                        quote!(metadoc::Kind::<#metadata_type>::new_struct(#outer_name, vec![#(#children),*], &mut [#(#flattened_children),*], &mut [#(#flattened_metadata),*]))
                     }
-                },
+                }
                 syn::Fields::Unnamed(fields) => {
                     if fields.unnamed.is_empty() {
-                        quote!(struct_metadata::Kind::<#metadata_type>::Struct { name: #outer_name, children: vec![] })
+                        quote!(metadoc::Kind::<#metadata_type>::Struct { name: #outer_name.into(), children: vec![] })
                     } else if fields.unnamed.len() == 1 {
                         let ty = &fields.unnamed[0].ty;
-                        let ty = quote_spanned!(ty.span() => <#ty as struct_metadata::Described::<#metadata_type>>::metadata());
-                        quote!(struct_metadata::Kind::<#metadata_type>::Aliased { name: #outer_name, kind: Box::new(#ty)})
+                        let ty = quote_spanned!(ty.span() => <#ty as metadoc::Described::<#metadata_type>>::metadata());
+                        quote!(metadoc::Kind::<#metadata_type>::Aliased { name: #outer_name.into(), kind: Box::new(#ty)})
                     } else {
                         panic!("tuple struct not supported")
                     }
-                },
+                }
                 syn::Fields::Unit => {
-                    quote!(struct_metadata::Kind::<#metadata_type>::Struct { name: #outer_name, children: vec![] })
-                },
+                    quote!(metadoc::Kind::<#metadata_type>::Struct { name: #outer_name.into(), children: vec![] })
+                }
             };
 
             let docs = parse_doc_comment(&attrs);
             let metadata: proc_macro2::TokenStream = parse_metadata_params(&metadata_type, &attrs);
             let output = quote! {
-                impl struct_metadata::Described::<#metadata_type> for #ident {
+                impl metadoc::Described::<#metadata_type> for #ident {
                     #[allow(clippy::needless_update)]
-                    fn metadata() -> struct_metadata::Descriptor::<#metadata_type> {
-                        let mut data = struct_metadata::Descriptor::<#metadata_type> {
-                            docs: #docs,
+                    fn metadata() -> metadoc::Descriptor::<#metadata_type> {
+                        let mut data = metadoc::Descriptor::<#metadata_type> {
+                            docs: metadoc::StaticStrings::from_option_vec(#docs),
                             kind: #kind,
                             metadata: #metadata,
                         };
@@ -131,19 +148,28 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
 
         syn::Data::Enum(data) => {
-
             let mut all_variants = vec![];
 
             for variant in data.variants {
-
                 if !variant.fields.is_empty() {
-                    return syn::Error::new(variant.fields.span(), "Only enums without field values are supported.").into_compile_error().into()
+                    return syn::Error::new(
+                        variant.fields.span(),
+                        "Only enums without field values are supported.",
+                    )
+                    .into_compile_error()
+                    .into();
                 }
 
                 let name = variant.ident.clone();
                 let docs = parse_doc_comment(&variant.attrs);
-                let metadata: proc_macro2::TokenStream = parse_metadata_params(&metadata_type, &variant.attrs);
-                let SerdeFieldAttrs {rename, flatten: _, has_default: _, mut aliases } = _parse_serde_field_attrs(&variant.attrs);
+                let metadata: proc_macro2::TokenStream =
+                    parse_metadata_params(&metadata_type, &variant.attrs);
+                let SerdeFieldAttrs {
+                    rename,
+                    flatten: _,
+                    has_default: _,
+                    mut aliases,
+                } = _parse_serde_field_attrs(&variant.attrs);
 
                 let name = if let Some(name) = rename {
                     aliases.insert(0, name.clone());
@@ -157,23 +183,23 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     quote_spanned!(variant.span() => stringify!(#name))
                 };
 
-                all_variants.push(quote!{struct_metadata::Variant::<#metadata_type> {
-                    label: #name,
-                    docs: #docs,
+                all_variants.push(quote! {metadoc::Variant::<#metadata_type> {
+                    label: #name.into(),
+                    docs: metadoc::StaticStrings::from_option_vec(#docs),
                     metadata: #metadata,
-                    aliases: &[#(#aliases),*]
+                    aliases: [#(#aliases),*].as_slice().into()
                 }});
             }
 
             let docs = parse_doc_comment(&attrs);
             let metadata: proc_macro2::TokenStream = parse_metadata_params(&metadata_type, &attrs);
             let output = quote! {
-                impl struct_metadata::Described::<#metadata_type> for #ident {
-                    fn metadata() -> struct_metadata::Descriptor::<#metadata_type> {
-                        struct_metadata::Descriptor::<#metadata_type> {
-                            docs: #docs,
-                            kind: struct_metadata::Kind::<#metadata_type>::Enum {
-                                name: #outer_name,
+                impl metadoc::Described::<#metadata_type> for #ident {
+                    fn metadata() -> metadoc::Descriptor::<#metadata_type> {
+                        metadoc::Descriptor::<#metadata_type> {
+                            docs: metadoc::StaticStrings::from_option_vec(#docs),
+                            kind: metadoc::Kind::<#metadata_type>::Enum {
+                                name: #outer_name.into(),
                                 variants: vec![#(#all_variants),*]
                             },
                             metadata: #metadata,
@@ -193,56 +219,65 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
 /// Derive macro for the Described trait for enums where the varient labels provided should come
 /// from the to_string method rather than raw varient names
-#[proc_macro_derive(DescribedEnumString, attributes(metadata, metadata_type, metadata_sequence, serde, strum))]
+#[proc_macro_derive(
+    DescribedEnumString,
+    attributes(metadata, metadata_type, metadata_sequence, serde, strum)
+)]
 pub fn derive_enum_string(input: TokenStream) -> TokenStream {
-    let DeriveInput {ident, attrs, data, ..} = parse_macro_input!(input);
+    let DeriveInput {
+        ident, attrs, data, ..
+    } = parse_macro_input!(input);
 
     let metadata_type = parse_metadata_type(&attrs);
     let strum_attr = _parse_strum_attrs(&attrs);
 
     match data {
         syn::Data::Enum(data) => {
-
             let mut all_variants = vec![];
 
             for variant in data.variants {
-
                 if !variant.fields.is_empty() {
-                    return syn::Error::new(variant.fields.span(), "Only enums without field values are supported.").into_compile_error().into()
+                    return syn::Error::new(
+                        variant.fields.span(),
+                        "Only enums without field values are supported.",
+                    )
+                    .into_compile_error()
+                    .into();
                 }
 
                 let name = variant.ident.clone();
                 let docs = parse_doc_comment(&variant.attrs);
-                let metadata: proc_macro2::TokenStream = parse_metadata_params(&metadata_type, &variant.attrs);
+                let metadata: proc_macro2::TokenStream =
+                    parse_metadata_params(&metadata_type, &variant.attrs);
 
                 // let name: proc_macro2::TokenStream = quote_spanned!(variant.span() => stringify!(#name));
                 let name = match strum_attr.serialize_all {
                     Some(case) => {
                         let new_name = name.to_string().to_case(case);
                         quote!(#new_name)
-                    },
+                    }
                     None => {
                         quote!(#name)
-                    },
+                    }
                 };
 
-                all_variants.push(quote!{struct_metadata::Variant::<#metadata_type> {
-                    label: #name,
-                    docs: #docs,
+                all_variants.push(quote! {metadoc::Variant::<#metadata_type> {
+                    label: #name.into(),
+                    docs: metadoc::StaticStrings::from_option_vec(#docs),
                     metadata: #metadata,
-                    aliases: &[#name]
+                    aliases: [#name].as_slice().into()
                 }});
             }
 
             let docs = parse_doc_comment(&attrs);
             let metadata: proc_macro2::TokenStream = parse_metadata_params(&metadata_type, &attrs);
             let output = quote! {
-                impl struct_metadata::Described::<#metadata_type> for #ident {
-                    fn metadata() -> struct_metadata::Descriptor::<#metadata_type> {
-                        struct_metadata::Descriptor::<#metadata_type> {
-                            docs: #docs,
-                            kind: struct_metadata::Kind::<#metadata_type>::Enum {
-                                name: stringify!(#ident),
+                impl metadoc::Described::<#metadata_type> for #ident {
+                    fn metadata() -> metadoc::Descriptor::<#metadata_type> {
+                        metadoc::Descriptor::<#metadata_type> {
+                            docs: metadoc::StaticStrings::from_option_vec(#docs),
+                            kind: metadoc::Kind::<#metadata_type>::Enum {
+                                name: stringify!(#ident).into(),
                                 variants: vec![#(#all_variants),*]
                             },
                             metadata: #metadata,
@@ -260,18 +295,19 @@ pub fn derive_enum_string(input: TokenStream) -> TokenStream {
     }
 }
 
-
 /// Helper function to pull out docstrings
 /// syn always stores comments as attribute pairs with the path "doc"
 fn parse_doc_comment(attrs: &[syn::Attribute]) -> proc_macro2::TokenStream {
     let mut lines = vec![];
     for attr in attrs {
         if let syn::AttrStyle::Inner(_) = attr.style {
-            continue
+            continue;
         }
 
         if let syn::Meta::NameValue(pair) = &attr.meta {
-            if !pair.path.is_ident("doc") { continue }
+            if !pair.path.is_ident("doc") {
+                continue;
+            }
             if let Some(doc) = pair.value.span().source_text() {
                 let doc = doc.strip_prefix("///").unwrap_or(&doc);
                 lines.push(doc.trim().to_string());
@@ -282,7 +318,7 @@ fn parse_doc_comment(attrs: &[syn::Attribute]) -> proc_macro2::TokenStream {
     if lines.is_empty() {
         quote! { None }
     } else {
-        quote!{ Some(vec![
+        quote! { Some(vec![
             #( #lines, )*
         ])}
     }
@@ -316,7 +352,9 @@ fn parse_metadata_type(attrs: &[syn::Attribute]) -> MetadataKind {
         },
         None => match metadata_sequence {
             Some(tokens) => MetadataKind::Sequence(tokens),
-            None => MetadataKind::Sequence(quote!(std::collections::HashMap<&'static str, &'static str>)),
+            None => MetadataKind::Sequence(quote!(
+                std::collections::HashMap<&'static str, &'static str>
+            )),
         },
     }
 }
@@ -328,8 +366,9 @@ fn _parse_metadata_sequence(attrs: &[syn::Attribute]) -> Option<proc_macro2::Tok
     for attr in attrs {
         if let syn::Meta::List(meta) = &attr.meta {
             if meta.path.is_ident("metadata_sequence") {
-                let MetadataType(name, _) = syn::parse2(meta.tokens.clone()).expect("Invalid metadata_sequence");
-                return Some(quote!{ #name })    
+                let MetadataType(name, _) =
+                    syn::parse2(meta.tokens.clone()).expect("Invalid metadata_sequence");
+                return Some(quote! { #name });
             }
         }
     }
@@ -342,8 +381,9 @@ fn _parse_metadata_type(attrs: &[syn::Attribute]) -> Option<(proc_macro2::TokenS
     for attr in attrs {
         if let syn::Meta::List(meta) = &attr.meta {
             if meta.path.is_ident("metadata_type") {
-                let MetadataType(name, defaults) = syn::parse2(meta.tokens.clone()).expect("Invalid metadata_type");
-                return Some((quote!{ #name }, defaults))    
+                let MetadataType(name, defaults) =
+                    syn::parse2(meta.tokens.clone()).expect("Invalid metadata_type");
+                return Some((quote! { #name }, defaults));
             }
         }
     }
@@ -351,22 +391,27 @@ fn _parse_metadata_type(attrs: &[syn::Attribute]) -> Option<(proc_macro2::TokenS
 }
 
 /// Parse out the metadata attribute
-fn parse_metadata_params(metatype: &MetadataKind, attrs: &[syn::Attribute]) -> proc_macro2::TokenStream {
+fn parse_metadata_params(
+    metatype: &MetadataKind,
+    attrs: &[syn::Attribute],
+) -> proc_macro2::TokenStream {
     match metatype {
         MetadataKind::Sequence(_) => {
             for attr in attrs {
                 if let syn::Meta::List(meta) = &attr.meta {
                     if meta.path.is_ident("metadata") {
-                        let MetadataParams (names, values) = syn::parse2(meta.tokens.clone())
-                            .unwrap_or_else(|_| panic!("Invalid metadata attribute: {}", meta.tokens));
-                        return quote!{ [
+                        let MetadataParams(names, values) = syn::parse2(meta.tokens.clone())
+                            .unwrap_or_else(|_| {
+                                panic!("Invalid metadata attribute: {}", meta.tokens)
+                            });
+                        return quote! { [
                             #((stringify!(#names), stringify!(#values).into())),*
-                        ].into_iter().collect() }
+                        ].into_iter().collect() };
                     }
                 }
             }
-            quote!{ Default::default() }
-        },
+            quote! { Default::default() }
+        }
         MetadataKind::Type(type_name, defaults) => {
             let defaults = if *defaults {
                 quote!(..Default::default())
@@ -377,18 +422,20 @@ fn parse_metadata_params(metatype: &MetadataKind, attrs: &[syn::Attribute]) -> p
             for attr in attrs {
                 if let syn::Meta::List(meta) = &attr.meta {
                     if meta.path.is_ident("metadata") {
-                        let MetadataParams (names, values) = syn::parse2(meta.tokens.clone())
-                            .unwrap_or_else(|_| panic!("Invalid metadata attribute: {}", meta.tokens));
-                        return quote!{
+                        let MetadataParams(names, values) = syn::parse2(meta.tokens.clone())
+                            .unwrap_or_else(|_| {
+                                panic!("Invalid metadata attribute: {}", meta.tokens)
+                            });
+                        return quote! {
                             #type_name {
                                 #(#names: #values.into(),)*
                                 #defaults
                             }
-                        }
+                        };
                     }
                 }
             }
-            quote!{ Default::default() }
+            quote! { Default::default() }
         }
     }
 }
@@ -439,7 +486,7 @@ impl syn::parse::Parse for MetadataParams {
 
         loop {
             if input.is_empty() {
-                break
+                break;
             }
 
             let key = input.parse()?;
@@ -453,7 +500,7 @@ impl syn::parse::Parse for MetadataParams {
             values.push(value);
 
             if input.is_empty() {
-                break
+                break;
             }
             input.parse::<Token![,]>()?;
         }
@@ -485,7 +532,7 @@ struct SerdeFieldAttrs {
     /// has a default been defined on this field
     has_default: bool,
     /// other names a field might be labled under
-    aliases: Vec<String>
+    aliases: Vec<String>,
 }
 
 impl syn::parse::Parse for SerdeFieldAttrs {
@@ -522,16 +569,15 @@ impl syn::parse::Parse for SerdeFieldAttrs {
             }
 
             if input.is_empty() {
-                break
+                break;
             }
             input.parse::<Token![,]>()?;
         }
 
-//         Ok(MetadataParams(names, values))
+        //         Ok(MetadataParams(names, values))
         Ok(out)
     }
 }
-
 
 /// Parse metadata type if its a struct
 fn _parse_serde_attrs(attrs: &[syn::Attribute]) -> SerdeAttrs {
@@ -586,7 +632,7 @@ impl syn::parse::Parse for SerdeAttrs {
             }
 
             if input.is_empty() {
-                break
+                break;
             }
             input.parse::<Token![,]>()?;
         }
@@ -594,7 +640,6 @@ impl syn::parse::Parse for SerdeAttrs {
         Ok(out)
     }
 }
-
 
 /// Parse metadata type if its a struct
 fn _parse_strum_attrs(attrs: &[syn::Attribute]) -> StrumAttrs {
@@ -637,7 +682,7 @@ impl syn::parse::Parse for StrumAttrs {
             }
 
             if input.is_empty() {
-                break
+                break;
             }
             input.parse::<Token![,]>()?;
         }
@@ -645,7 +690,6 @@ impl syn::parse::Parse for StrumAttrs {
         Ok(out)
     }
 }
-
 
 /// Determine the case conversion scheme for a given name
 fn fetch_case(name: &syn::LitStr) -> syn::Result<convert_case::Case> {
@@ -658,6 +702,11 @@ fn fetch_case(name: &syn::LitStr) -> syn::Result<convert_case::Case> {
         "upper_snake_case" | "screaming_snake_case" => convert_case::Case::UpperSnake,
         "kebab_case" => convert_case::Case::Kebab,
         "upper_kebab_case" | "screaming_kebab_case" => convert_case::Case::UpperKebab,
-        _ => return Err(syn::Error::new(name.span(), format!("Unsupported case string: {}", name.value())))
+        _ => {
+            return Err(syn::Error::new(
+                name.span(),
+                format!("Unsupported case string: {}", name.value()),
+            ));
+        }
     })
 }

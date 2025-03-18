@@ -1,4 +1,4 @@
-use struct_metadata::{Described, Kind};
+use metadoc::{Described, Kind};
 
 
 #[allow(dead_code)]
@@ -28,7 +28,7 @@ fn default_defined() {
     let data = FieldDefaults::metadata();
     let Kind::Struct{ name, children} = data.kind else { panic!() };
     assert_eq!(name, "FieldDefaults");
-    
+
     assert_eq!(children[0].label, "has_default");
     assert!(children[0].has_default);
 
@@ -42,7 +42,7 @@ fn default_defined() {
     let data = StructDefault::metadata();
     let Kind::Struct{ name, children} = data.kind else { panic!() };
     assert_eq!(name, "StructDefault");
-    
+
     assert_eq!(children[0].label, "double_default");
     assert!(children[0].has_default);
 
