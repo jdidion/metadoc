@@ -5,8 +5,9 @@
 The [`metadoc-example`](metadoc-example) crate shows a usage example. The key points are:
 
 * Depends on
-  * `metadoc`: Enables deriving a `metadata` function for a struct, which catures the struct name, documentation, and field metadata
-  * `minijinja` and `minijinja-embed`: Template library
+  * `metadoc`: Enables deriving a `metadata` function for a struct, which captures the struct name, documentation, and field metadata
+    * The `serde` feature must be enabled for this example
+  * `minijinja` and `minijinja-embed`: Template engine
   * `serde`: Enables deriving serializers and deserializers for metadata structs - this is required to be able to use them in the templates
   * `clap`: Enables deriving a CLI parser
 
